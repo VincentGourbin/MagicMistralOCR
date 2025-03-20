@@ -1,3 +1,9 @@
+---
+title: MagicMistralOCR
+app_file: app.py
+sdk: gradio
+sdk_version: 5.22.0
+---
 # Magic Document Scanner
 
 Une application intelligente pour extraire des informations de vos documents en utilisant la puissance des modèles de vision-langage (VLM).
