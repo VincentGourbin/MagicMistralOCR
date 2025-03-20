@@ -5,3 +5,4 @@ pillow
 pdf2image
 poppler-utils
 requests
+spaces

@@ -3,3 +3,4 @@ mlx>=0.0.5
 mlx-vlm>=0.0.1
 pillow
 pdf2image
+spaces
