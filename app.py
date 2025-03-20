@@ -23,8 +23,18 @@ if MODEL_MODE == "mlx":
     MODEL_NAME = "mlx-community/Mistral-Small-3.1-24B-Instruct-2503-8bit"
 else:
     # Version Transformers pour Hugging Face Spaces
-    import torch
-    from transformers import pipeline, AutoProcessor, AutoModelForVision2Seq
+    # Supprime les avertissements CUDA inutiles
+    import os
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    
+    # Import avec gestion des avertissements
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning)
+        import torch
+        from transformers import pipeline, AutoProcessor, AutoModelForVision2Seq
+    
     MODEL_NAME = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
 
 # Chemins et configurations
@@ -56,20 +66,56 @@ def load_model():
     else:
         if global_state["pipe"] is None:
             print("Chargement du modèle Hugging Face...")
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            processor = AutoProcessor.from_pretrained(MODEL_NAME)
-            model = AutoModelForVision2Seq.from_pretrained(
-                MODEL_NAME, 
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map=device
-            )
-            pipe = pipeline(
-                "image-to-text", 
-                model=model, 
-                tokenizer=processor.tokenizer,
-                image_processor=processor.image_processor,
-                device=device
-            )
+            
+            # Vérifier la disponibilité du GPU avec gestion d'erreur
+            try:
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                print(f"Tentative d'utilisation du device: {device}")
+            except Exception as e:
+                print(f"Erreur lors de la détection du GPU: {e}")
+                device = "cpu"
+                print("Fallback sur CPU")
+            
+            # Chargement sécurisé du modèle
+            try:
+                processor = AutoProcessor.from_pretrained(MODEL_NAME)
+                
+                # Ajustement des options selon le device
+                model_kwargs = {
+                    "device_map": device
+                }
+                
+                # Ajouter dtype seulement si CUDA est disponible pour éviter des erreurs
+                if device == "cuda":
+                    model_kwargs["torch_dtype"] = torch.float16
+                
+                model = AutoModelForVision2Seq.from_pretrained(
+                    MODEL_NAME, 
+                    **model_kwargs
+                )
+                
+                pipe = pipeline(
+                    "image-to-text", 
+                    model=model, 
+                    tokenizer=processor.tokenizer,
+                    image_processor=processor.image_processor,
+                    device=device
+                )
+                print(f"Modèle chargé avec succès sur {device}")
+            except Exception as e:
+                print(f"Erreur lors du chargement du modèle: {e}")
+                print("Tentative de chargement avec options minimales...")
+                
+                # Tentative avec options minimales
+                processor = AutoProcessor.from_pretrained(MODEL_NAME)
+                model = AutoModelForVision2Seq.from_pretrained(MODEL_NAME)
+                pipe = pipeline(
+                    "image-to-text", 
+                    model=model, 
+                    tokenizer=processor.tokenizer,
+                    image_processor=processor.image_processor
+                )
+                print("Modèle chargé avec options minimales")
             global_state["processor"] = processor
             global_state["pipe"] = pipe
             print(f"Modèle Hugging Face chargé avec succès sur {device}!")
