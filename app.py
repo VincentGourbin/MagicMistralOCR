@@ -5,8 +5,9 @@ import tempfile
 import json
 from PIL import Image
 import pdf2image
-import time as import_time  # Pour horodater les résultats
+import time as import_time
 import spaces
+from io import BytesIO
 
 # Détecter l'environnement (MLX sur Mac M1/M2/M3 ou Hugging Face sur le cloud)
 is_mac_mlx = sys.platform == "darwin" and os.path.exists("/proc/cpuinfo") == False
@@ -14,7 +15,7 @@ is_mac_mlx = sys.platform == "darwin" and os.path.exists("/proc/cpuinfo") == Fal
 gpu_timeout = int(os.getenv("GPU_TIMEOUT", 60))
 
 # Variable pour indiquer le mode (MLX ou HF)
-MODEL_MODE = "mlx" if is_mac_mlx else "hf"
+MODEL_MODE = "mlx" if is_mac_mlx else "vllm"
 
 # Configuration du modèle selon l'environnement
 if MODEL_MODE == "mlx":
@@ -25,9 +26,15 @@ if MODEL_MODE == "mlx":
     from mlx_vlm.utils import load_config
     MODEL_NAME = "mlx-community/Mistral-Small-3.1-24B-Instruct-2503-8bit"
 else:
-    # Version Transformers pour Hugging Face Spaces
+    # Version VLLM pour Hugging Face Spaces avec les paramètres corrects
     import torch
-    from transformers import pipeline, AutoProcessor, AutoModelForVision2Seq
+    from vllm import LLM
+    from vllm.sampling_params import SamplingParams
+    from vllm.inputs.data import TokensPrompt
+    from vllm.multimodal import MultiModalDataBuiltins
+    
+    from mistral_common.protocol.instruct.messages import TextChunk, ImageURLChunk
+    
     MODEL_NAME = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
 
 # Chemins et configurations
@@ -41,7 +48,8 @@ global_state = {
     "model": None,
     "processor": None,
     "config": None,
-    "pipe": None               # Pour la version HF
+    "llm": None,               # Pour la version VLLM
+    "sampling_params": None    # Pour la version VLLM
 }
 
 # Fonction pour charger le modèle selon l'environnement
@@ -56,50 +64,76 @@ def load_model():
             global_state["processor"] = processor
             global_state["config"] = config
             print("Modèle MLX chargé avec succès!")
-        return global_state["model"], global_state["processor"], global_state["config"], None
+        return global_state["model"], global_state["processor"], global_state["config"], None, None
     else:
-        if global_state["pipe"] is None:
-            print("Chargement du modèle Hugging Face...")
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            processor = AutoProcessor.from_pretrained(MODEL_NAME)
-            model = AutoModelForVision2Seq.from_pretrained(
-                MODEL_NAME, 
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map=device
+        if global_state["llm"] is None:
+            print("Chargement du modèle avec VLLM...")
+            # Utiliser les paramètres corrects mentionnés sur le forum
+            llm = LLM(
+                model=MODEL_NAME,
+                tokenizer_mode="mistral",  # Obligatoire pour Mistral
+                config_format="mistral",   # Paramètre clé pour Mistral-3.1
+                load_format="mistral",     # Paramètre clé pour Mistral-3.1
+                dtype="float16" if torch.cuda.is_available() else "float32",
+                gpu_memory_utilization=0.8
             )
-            pipe = pipeline(
-                "image-to-text", 
-                model=model, 
-                tokenizer=processor.tokenizer,
-                image_processor=processor.image_processor,
-                device=device
+            
+            # Paramètres d'échantillonnage pour la génération
+            sampling_params = SamplingParams(
+                max_tokens=2048,
+                temperature=0.1
             )
-            global_state["processor"] = processor
-            global_state["pipe"] = pipe
-            print(f"Modèle Hugging Face chargé avec succès sur {device}!")
-        return None, global_state["processor"], None, global_state["pipe"]
+            
+            global_state["llm"] = llm
+            global_state["sampling_params"] = sampling_params
+            print(f"Modèle VLLM chargé avec succès!")
+        return None, None, None, global_state["llm"], global_state["sampling_params"]
 
 # Fonction pour générer du texte à partir d'une image selon l'environnement
-def generate_from_image(image_path, prompt, model=None, processor=None, config=None, pipe=None):
+def generate_from_image(image_path, prompt_text, model=None, processor=None, config=None, llm=None, sampling_params=None):
     if MODEL_MODE == "mlx":
         # Version MLX
         formatted_prompt = apply_chat_template(
-            processor, config, prompt, num_images=1
+            processor, config, prompt_text, num_images=1
         )
         result = generate(model, processor, formatted_prompt, [image_path], verbose=False, max_tokens=2048, temperature=0.1)
         return result
     else:
-        # Version Hugging Face
-        image = Image.open(image_path)
-        result = pipe(
-            images=image,
-            prompt=prompt,
-            generate_kwargs={"max_new_tokens": 2048, "temperature": 0.1}
-        )[0]["generated_text"]
-        return result
+        # Version VLLM - suivre l'exemple adapté avec les paramètres corrects
+        try:
+            # Charger l'image depuis le chemin
+            image = Image.open(image_path)
+            
+            # Créer un URL factice pour l'image locale
+            dummy_url = f"file://{image_path}"
+            
+            # Créer le contenu utilisateur
+            user_content = [ImageURLChunk(image_url=dummy_url), TextChunk(text=prompt_text)]
+            
+            # Obtenir le tokenizer de Mistral
+            tokenizer = llm.llm_engine.tokenizer.tokenizer.mistral.instruct_tokenizer
+            
+            # Encoder le contenu utilisateur
+            tokens = tokenizer.encode_user_content(user_content, False)[0]
+            
+            # Créer le prompt avec tokens et image
+            vllm_prompt = TokensPrompt(
+                prompt_token_ids=tokens,
+                multi_modal_data=MultiModalDataBuiltins(image=[image])
+            )
+            
+            # Générer la réponse
+            outputs = llm.generate(vllm_prompt, sampling_params=sampling_params)
+            result = outputs[0].outputs[0].text
+            
+            return result
+        except Exception as e:
+            print(f"Erreur lors de la génération VLLM: {str(e)}")
+            # En cas d'erreur, essayer une approche alternative pour le débogage
+            return f"Erreur VLLM: {str(e)}"
 
 # Fonction pour extraire les titres de section directement à partir de l'image
-def extract_sections_from_image(image_path, model=None, processor=None, config=None, pipe=None):
+def extract_sections_from_image(image_path, model=None, processor=None, config=None, llm=None, sampling_params=None):
     # Préparation du prompt pour le modèle VLM avec demande explicite de format JSON
     prompt = """
     Examine cette image de document et extrait tous les titres de sections, champs ou entités présentes.
@@ -125,7 +159,7 @@ def extract_sections_from_image(image_path, model=None, processor=None, config=N
     """
     
     # Générer le résultat
-    result = generate_from_image(image_path, prompt, model, processor, config, pipe)
+    result = generate_from_image(image_path, prompt, model, processor, config, llm, sampling_params)
     
     # Extraction du JSON à partir du résultat
     try:
@@ -156,7 +190,7 @@ def extract_sections_from_image(image_path, model=None, processor=None, config=N
         return sections
 
 # Fonction pour extraire les valeurs des sections sélectionnées
-def extract_section_values(image_path, selected_sections, model=None, processor=None, config=None, pipe=None):
+def extract_section_values(image_path, selected_sections, model=None, processor=None, config=None, llm=None, sampling_params=None):
     # Transformer les sections sélectionnées en texte pour le prompt
     sections_text = "\n".join([f"- {section}" for section in selected_sections])
     
@@ -189,7 +223,7 @@ def extract_section_values(image_path, selected_sections, model=None, processor=
     """
     
     # Générer le résultat
-    result = generate_from_image(image_path, prompt, model, processor, config, pipe)
+    result = generate_from_image(image_path, prompt, model, processor, config, llm, sampling_params)
     
     # Extraction du JSON à partir du résultat
     try:
@@ -227,7 +261,7 @@ def magic_scan(file):
     _, file_extension = os.path.splitext(file_path)
     
     # Charger le modèle selon l'environnement
-    model, processor, config, pipe = load_model()
+    model, processor, config, llm, sampling_params = load_model()
     
     # Réinitialiser les chemins d'image
     global_state["image_paths"] = {}
@@ -249,7 +283,7 @@ def magic_scan(file):
             global_state["image_paths"][(0, i+1)] = temp_img_path
             
             # Traiter l'image avec le modèle
-            page_sections = extract_sections_from_image(temp_img_path, model, processor, config, pipe)
+            page_sections = extract_sections_from_image(temp_img_path, model, processor, config, llm, sampling_params)
             
             # Ajouter les titres trouvés avec indication de la page
             for section in page_sections:
@@ -259,7 +293,7 @@ def magic_scan(file):
     else:
         # Pour les images directement
         global_state["image_paths"][(0, 1)] = file_path
-        all_sections = extract_sections_from_image(file_path, model, processor, config, pipe)
+        all_sections = extract_sections_from_image(file_path, model, processor, config, llm, sampling_params)
         for section in all_sections:
             section["page"] = 1
             section["doc_index"] = 0
@@ -325,7 +359,7 @@ def process_multiple_documents(files, selected_sections):
         return "Veuillez sélectionner des documents et des sections à extraire.", None
     
     # Charger le modèle
-    model, processor, config, pipe = load_model()
+    model, processor, config, llm, sampling_params = load_model()
     
     # Extraire les titres des sections sélectionnées
     section_titles = []
@@ -363,7 +397,7 @@ def process_multiple_documents(files, selected_sections):
                 img.save(temp_img_path, "PNG", quality=95, dpi=(300, 300))
                 
                 # Extraire les valeurs des sections pour cette page
-                page_values = extract_section_values(temp_img_path, section_titles, model, processor, config, pipe)
+                page_values = extract_section_values(temp_img_path, section_titles, model, processor, config, llm, sampling_params)
                 
                 # Ajouter le numéro de page à chaque résultat
                 for value in page_values:
@@ -376,7 +410,7 @@ def process_multiple_documents(files, selected_sections):
                 os.remove(temp_img_path)
         else:
             # Pour les images directement
-            page_values = extract_section_values(file_path, section_titles, model, processor, config, pipe)
+            page_values = extract_section_values(file_path, section_titles, model, processor, config, llm, sampling_params)
             
             # Ajouter le numéro de page
             for value in page_values:
@@ -391,7 +425,7 @@ def process_multiple_documents(files, selected_sections):
     # Organiser les résultats
     result = {
         "timestamp": import_time.strftime("%Y-%m-%d %H:%M:%S"),
-        "mode": MODEL_MODE,  # Indiquer si c'est la version MLX ou HF
+        "mode": MODEL_MODE,  # Indiquer si c'est la version MLX ou VLLM
         "documents": all_results
     }
     
@@ -423,7 +457,7 @@ def show_runtime_info():
         return "Exécution avec MLX sur Mac Apple Silicon - Modèle: mlx-community/Mistral-Small-3.1-24B-Instruct-2503-8bit"
     else:
         device = "GPU (CUDA)" if torch.cuda.is_available() else "CPU"
-        return f"Exécution avec Hugging Face Transformers sur {device} - Modèle: mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+        return f"Exécution avec VLLM sur {device} - Modèle: mistralai/Mistral-Small-3.1-24B-Instruct-2503"
 
 # Interface Gradio
 with gr.Blocks(title="Magic Document Scanner") as app:
