@@ -4,6 +4,7 @@ app_file: app.py
 sdk: gradio
 sdk_version: 5.22.0
 ---
+
 # Magic Document Scanner
 
 Une application intelligente pour extraire des informations de vos documents en utilisant la puissance des modèles de vision-langage (VLM).
@@ -14,50 +15,40 @@ Une application intelligente pour extraire des informations de vos documents en 
 - **Saisie manuelle de sections** : Ajout de sections personnalisées pour une extraction précise
 - **Traitement par lots** : Analyse de plusieurs documents du même type en une seule fois
 - **Format JSON structuré** : Résultats organisés et faciles à traiter pour l'intégration à d'autres systèmes
-- **Double compatibilité** : Fonctionne à la fois sur Mac avec MLX et sur toutes les plateformes avec Hugging Face Transformers
+- **Mode expert** : Personnalisez les instructions d'extraction pour des cas d'utilisation spécifiques
+- **Compatibilité multiple** : 
+  - Mode MLX optimisé pour Mac avec Apple Silicon
+  - Mode API pour utiliser des services externes comme Mistral AI ou OpenAI
+- **Serveur MCP** : Permet aux assistants IA (comme Claude Desktop) d'utiliser directement les fonctionnalités d'extraction
 
 ## Comment utiliser
 
-### 1. Configurer les sections
+### 1. Configurer l'API externe (optionnel)
+- Cliquez sur "Configuration API externe" pour ouvrir le panneau
+- Entrez l'URL du serveur API (format: https://api.mistral.ai/v1/chat/completions)
+- Spécifiez le modèle à utiliser (ex: mistral-small-latest)
+- Saisissez votre clé API et activez l'option
+- Cliquez sur "Sauvegarder la configuration API"
+
+### 2. Configurer les sections
 - Téléchargez un document modèle et cliquez sur "Magic Scan" pour détecter automatiquement les sections.
 - OU ajoutez manuellement des sections en les saisissant (une par ligne) et en cliquant sur "Ajouter ces sections".
 - Cochez les sections que vous souhaitez extraire.
 
-### 2. Extraire les valeurs
+### 3. Extraire les valeurs
 - Téléchargez un ou plusieurs documents du même type.
+- Pour une extraction avancée, utilisez le mode expert pour personnaliser les instructions d'extraction.
 - Cliquez sur "Extraire les valeurs" pour obtenir les informations des sections sélectionnées.
 - Les résultats sont disponibles au format JSON.
 
-## Configuration technique
-
-L'application détecte automatiquement l'environnement d'exécution :
-
-- **Sur Mac avec Apple Silicon** : Utilise MLX pour une exécution optimisée avec le modèle mlx-community/Mistral-Small-3.1-24B-Instruct-2503-8bit
-- **Sur les autres plateformes** : Utilise Hugging Face Transformers avec le modèle mistralai/Mistral-Small-3.1-24B-Instruct-2503
-
-## Installation locale
-
-### Sur Mac Apple Silicon
-
-```bash
-# Installer les dépendances
-pip install -r mac-requirements.txt
-
-# Exécuter l'application
-python app.py
-```
-
-### Sur d'autres plateformes
-
-```bash
-# Installer les dépendances
-pip install -r requirements.txt
-
-# Exécuter l'application
-python app.py
-```
-
-## Notes importantes
-
-- Pour les PDF, seules les 5 premières pages sont traitées pour limiter le temps d'analyse
-- La qualité de l'extraction dépend de la clarté du document et de la qualité de l'image
+### 4. Utiliser Magic Document Scanner avec un assistant IA (MCP)
+- Lancez Magic Document Scanner avec l'option MCP activée (déjà configuré par défaut)
+- Configurez votre client MCP (comme Claude Desktop) en ajoutant cette URL:
+  ```json
+  {
+    "mcpServers": {
+      "magic-scanner": {
+        "url": "http://localhost:7860/gradio_api/mcp/sse"
+      }
+    }
+  }
