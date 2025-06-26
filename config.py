@@ -30,9 +30,13 @@ global_state = {
 
 # Détecter le mode d'exécution
 is_mac_mlx = sys.platform == "darwin" and platform.processor() == 'arm'
+# Vérifier si c'est un serveur local
+is_local_server = any(local_host in global_state["api_config"]["server"] for local_host in ["localhost", "127.0.0.1", "0.0.0.0"])
+
+# Pour les serveurs locaux, pas besoin de clé API
 use_api = global_state["api_config"]["enabled"] and \
-          global_state["api_config"]["api_key"] and \
-          global_state["api_config"]["server"]
+          global_state["api_config"]["server"] and \
+          (is_local_server or global_state["api_config"]["api_key"])
 
 # Définir le mode: MLX ou API
 if is_mac_mlx:
@@ -59,10 +63,14 @@ def refresh_api_status():
     """Met à jour le statut de l'API en fonction de la configuration actuelle."""
     global MODE, MODEL_NAME
     
+    # Vérifier si c'est un serveur local
+    is_local_server = any(local_host in global_state["api_config"]["server"] for local_host in ["localhost", "127.0.0.1", "0.0.0.0"])
+    
     # Calculer si l'API est utilisable
+    # Pour les serveurs locaux, pas besoin de clé API
     use_api = global_state["api_config"]["enabled"] and \
-              global_state["api_config"]["api_key"] and \
-              global_state["api_config"]["server"]
+              global_state["api_config"]["server"] and \
+              (is_local_server or global_state["api_config"]["api_key"])
     
     # Mode précédent pour le log
     previous_mode = global_state["MODE"]

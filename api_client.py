@@ -26,8 +26,16 @@ def call_external_api(image_path: str, prompt_text: str, page_num: int = 0) -> s
         
         api_config = global_state["api_config"]
         
-        if not api_config["enabled"] or not api_config["api_key"] or not api_config["server"]:
+        # Vérifier si c'est un serveur local
+        is_local_server = any(local_host in api_config["server"] for local_host in ["localhost", "127.0.0.1", "0.0.0.0"])
+        
+        # Pour les serveurs locaux, on n'exige pas de clé API
+        if not api_config["enabled"] or not api_config["server"]:
             return json.dumps({"error": "Configuration API manquante ou désactivée"})
+        
+        # Pour les serveurs externes, on exige une clé API
+        if not is_local_server and not api_config["api_key"]:
+            return json.dumps({"error": "Clé API requise pour les serveurs externes"})
         
         # Vérifier si le fichier est un PDF
         temp_img_path = None
@@ -59,7 +67,9 @@ def call_external_api(image_path: str, prompt_text: str, page_num: int = 0) -> s
                     },
                     {
                         "type": "image_url",
-                        "image_url": f"data:image/jpeg;base64,{base64_image}"
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        }
                     }
                 ]
             }
@@ -67,9 +77,12 @@ def call_external_api(image_path: str, prompt_text: str, page_num: int = 0) -> s
         
         # Préparer la requête
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_config['api_key']}"
+            "Content-Type": "application/json"
         }
+        
+        # Ajouter l'authentification seulement si la clé API est fournie
+        if api_config["api_key"]:
+            headers["Authorization"] = f"Bearer {api_config['api_key']}"
         
         data = {
             "model": api_config["model"],
@@ -80,12 +93,16 @@ def call_external_api(image_path: str, prompt_text: str, page_num: int = 0) -> s
         print(f"Envoi de la requête API à: {api_config['server']}")
         
         # Envoi de la requête
-        response = requests.post(
-            api_config["server"],
-            headers=headers,
-            json=data,
-            timeout=60  # Timeout de 60 secondes
-        )
+        try:
+            response = requests.post(
+                api_config["server"],
+                headers=headers,
+                json=data,
+                timeout=60  # Timeout de 60 secondes
+            )
+        except Exception as req_error:
+            print(f"Erreur lors de la requête: {req_error}")
+            return json.dumps({"error": f"Erreur de connexion: {str(req_error)}"})
         
         # Traitement de la réponse
         if response.status_code == 200:
@@ -138,8 +155,12 @@ def update_api_config(server: str, model: str, api_key: str, enabled: bool) -> s
         clean_model = model.strip()
         clean_api_key = api_key.strip()
         
+        # Vérifier si c'est un serveur local
+        is_local_server = any(local_host in clean_server for local_host in ["localhost", "127.0.0.1", "0.0.0.0"])
+        
         # Valider si l'API est réellement utilisable
-        api_usable = enabled and clean_api_key and clean_server
+        # Pour les serveurs locaux, pas besoin de clé API
+        api_usable = enabled and clean_server and (is_local_server or clean_api_key)
         
         previous_mode = global_state["MODE"]
         print(f"État initial - Mode: {previous_mode}, API utilisable: {api_usable}")
