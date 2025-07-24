@@ -1,8 +1,21 @@
+"""
+Gestionnaire de modèles - Magic Document Scanner
+
+Ce module gère le chargement et l'utilisation des modèles :
+- Modèles MLX locaux (Apple Silicon)
+- APIs externes (Mistral, OpenAI, etc.)
+- Sélection automatique selon l'environnement
+
+Functions:
+- load_model(): Charge le modèle approprié selon le mode
+- generate_from_image(): Génère du texte à partir d'une image
+"""
+
 import os
 import json
 from typing import Tuple, Any, Optional
 
-from config import global_state, MODE, MODEL_NAME, TEMP_DIR
+from core.config import global_state, MODE, MODEL_NAME, TEMP_DIR
 
 # Fonction pour charger le modèle selon l'environnement
 def load_model():
@@ -12,7 +25,6 @@ def load_model():
             return None, None, None
 
         # Vérifier DIRECTEMENT le mode d'exécution dans global_state
-        print(f"*** load_model: MODE ACTUEL = {global_state['MODE']} ***")
         
         # Si on est en mode API, ne pas charger le modèle MLX
         if global_state["MODE"] == "api":
@@ -81,7 +93,6 @@ def generate_from_image(image_path: str, prompt_text: str, model=None, processor
         
         # Logging explicite du mode utilisé
         current_mode = global_state["MODE"]
-        print(f"*** generate_from_image: MODE ACTUEL = {current_mode} ***")
         
         # Vérifier si le fichier est un PDF
         temp_img_path = None
@@ -99,14 +110,21 @@ def generate_from_image(image_path: str, prompt_text: str, model=None, processor
             image_path = temp_img_path
         
         try:
+            import time
+            start_time = time.time()
+            
             # Utiliser le mode stocké dans global_state, pas la variable globale
             if global_state["MODE"] == "api":
-                print("*** UTILISATION DE L'API EXTERNE POUR GÉNÉRER LE TEXTE ***")
                 # Utiliser l'API externe
-                from api_client import call_external_api
-                return call_external_api(image_path, prompt_text, page_num)
+                from core.api_client import call_external_api
+                result = call_external_api(image_path, prompt_text, page_num)
+                
+                end_time = time.time()
+                elapsed_time = end_time - start_time
+                print(f"⏱️  Appel API: {elapsed_time:.2f}s")
+                
+                return result
             else:
-                print("*** UTILISATION DE MLX POUR GÉNÉRER LE TEXTE ***")
                 # Version MLX
                 from mlx_vlm.prompt_utils import apply_chat_template
                 from mlx_vlm import generate
@@ -115,18 +133,24 @@ def generate_from_image(image_path: str, prompt_text: str, model=None, processor
                     processor, config, prompt_text, num_images=1
                 )
                 result = generate(model, processor, formatted_prompt, [image_path], verbose=False, max_tokens=16384, temperature=0.1)
-                    # Extraire seulement le texte (premier élément du tuple)
+                
+                end_time = time.time()
+                elapsed_time = end_time - start_time
+                
+                # Extraire seulement le texte (premier élément du tuple)
                 if isinstance(result, tuple):
                     generated_text = result[0]
                     metadata = result[1]
                     
-                    # Optionnel: afficher les métadonnées pour debug
-                    print(f"Tokens utilisés: {metadata.get('total_tokens', 'N/A')}")
-                    print(f"Vitesse de génération: {metadata.get('generation_tps', 'N/A')} tokens/sec")
+                    # Afficher les métriques avec le temps
+                    tokens_used = metadata.get('total_tokens', 'N/A')
+                    generation_speed = metadata.get('generation_tps', 'N/A')
+                    print(f"⏱️  Génération MLX: {elapsed_time:.2f}s | {tokens_used} tokens | {generation_speed} t/s")
                     
                     return generated_text
                 else:
                     # Au cas où le format changerait dans une future version
+                    print(f"⏱️  Génération MLX: {elapsed_time:.2f}s")
                     return result
         finally:
             # Nettoyer le fichier temporaire si créé

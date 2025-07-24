@@ -1,13 +1,25 @@
+"""
+Fonctions MCP - Magic Document Scanner
+
+Ce module contient les fonctions exposées via le protocole MCP :
+- Analyse automatique de documents
+- Extraction de valeurs spécifiques
+- Interface standardisée pour les assistants IA
+
+Functions:
+- analyze_document(): Analyse complète d'un document
+- extract_values(): Extraction de valeurs spécifiques
+"""
+
 import os
 import json
 from typing import Dict, Any, List
 
-from config import TEMP_DIR, global_state
-from model_handler import load_model
-from data_extractor import extract_sections_from_image, extract_section_values
-from image_processor import download_image_from_url, convert_pdf_to_images, get_pdf_page_image
+from core.config import TEMP_DIR, global_state
+from core.model_handler import load_model
+from core.data_extractor import extract_sections_from_image, extract_section_values
+from utils.image_processor import download_image_from_url, convert_pdf_to_images, get_pdf_page_image
 
-# Fonction d'analyse de document pour MCP
 def analyze_document(image_url: str) -> Dict[str, Any]:
     """
     Analyse un document fourni par URL pour en extraire les sections.
@@ -74,7 +86,6 @@ def analyze_document(image_url: str) -> Dict[str, Any]:
                 except Exception as e:
                     print(f"Erreur lors du nettoyage de l'image temporaire: {str(e)}")
 
-# Fonction d'extraction de valeurs pour MCP
 def extract_values(image_url: str, sections: List[str], expert_instructions: str = "") -> Dict[str, Any]:
     """
     Extrait les valeurs des sections spécifiées dans un document.

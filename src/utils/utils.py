@@ -5,11 +5,15 @@ import base64
 import time
 from typing import List, Dict, Any, Union, Optional
 
-from config import global_state, TEMP_DIR
+from core.config import global_state, TEMP_DIR
 
-# Fonction pour nettoyer les fichiers temporaires
 def cleanup_temp_files():
-    """Nettoie les fichiers temporaires créés pendant le traitement."""
+    """
+    Nettoie les fichiers temporaires créés pendant le traitement.
+    
+    Parcourt tous les chemins stockés dans global_state["image_paths"] et supprime
+    les fichiers qui se trouvent dans le répertoire temporaire.
+    """
     for key, path in global_state["image_paths"].items():
         if os.path.exists(path) and path.startswith(TEMP_DIR):
             try:
@@ -17,9 +21,13 @@ def cleanup_temp_files():
             except Exception as e:
                 print(f"Erreur lors du nettoyage du fichier {path}: {e}")
 
-# Fonction pour libérer la mémoire utilisée par les modèles
 def free_memory():
-    """Libère la mémoire utilisée par les modèles."""
+    """
+    Libère la mémoire utilisée par les modèles.
+    
+    Nettoie les références aux modèles MLX et force la collecte de déchets
+    pour libérer la mémoire GPU/RAM.
+    """
     from config import MODE
     
     if MODE == "mlx":
@@ -30,9 +38,16 @@ def free_memory():
             import gc
             gc.collect()
 
-# Fonction pour extraire un JSON valide d'un texte
-def extract_json_from_text(text):
-    """Extrait le premier objet JSON valide d'un texte."""
+def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Extrait le premier objet JSON valide d'un texte.
+    
+    Args:
+        text (str): Texte contenant potentiellement du JSON
+        
+    Returns:
+        Optional[Dict[str, Any]]: Objet JSON parsé ou None si aucun JSON valide trouvé
+    """
     # Recherche la première séquence qui ressemble à un objet JSON
     json_pattern = r'(\{.*?\})'
     matches = re.findall(json_pattern, text, re.DOTALL)
@@ -68,7 +83,11 @@ def image_to_base64(image_path: str) -> str:
         print(f"Erreur lors de la conversion de l'image en base64: {str(e)}")
         return None
 
-# Fonction pour obtenir le timestamp actuel
-def get_timestamp():
-    """Retourne un timestamp formaté."""
+def get_timestamp() -> str:
+    """
+    Retourne un timestamp formaté.
+    
+    Returns:
+        str: Timestamp au format "YYYY-MM-DD HH:MM:SS"
+    """
     return time.strftime("%Y-%m-%d %H:%M:%S")

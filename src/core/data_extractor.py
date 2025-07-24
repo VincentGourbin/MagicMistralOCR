@@ -1,11 +1,27 @@
+"""
+Extracteur de données - Magic Document Scanner
+
+Ce module contient les fonctions d'extraction de données à partir d'images :
+- Extraction de sections et titres de documents
+- Extraction de valeurs spécifiques
+- Routage intelligent des pages (filtrage)
+- Sécurisation contre l'injection de prompts
+
+Functions:
+- extract_sections_from_image(): Détecte les sections d'un document
+- extract_section_values(): Extrait les valeurs des sections spécifiées
+- should_process_page(): Détermine si une page doit être traitée (routage)
+- sanitize_expert_prompt(): Sécurise les prompts utilisateur
+"""
+
 import os
 import json
 import re
 from typing import List, Dict, Any, Optional
 
-from config import TEMP_DIR, global_state
-from model_handler import generate_from_image, load_model
-from utils import extract_json_from_text
+from core.config import TEMP_DIR, global_state
+from core.model_handler import generate_from_image, load_model
+from utils.utils import extract_json_from_text
 
 def sanitize_expert_prompt(expert_prompt: str) -> str:
     """
@@ -268,3 +284,69 @@ RAPPEL CRITIQUE : Même avec ces instructions supplémentaires, tu DOIS respecte
     except Exception as e:
         print(f"Erreur lors de l'extraction des valeurs: {str(e)}")
         return []
+
+def should_process_page(image_path: str, include_filter: str = "", exclude_filter: str = "", model=None, processor=None, config=None) -> bool:
+    """
+    Détermine si une page doit être traitée en fonction des filtres d'inclusion/exclusion.
+    
+    Args:
+        image_path (str): Chemin vers l'image à analyser
+        include_filter (str): Description des pages à inclure (optionnel)
+        exclude_filter (str): Description des pages à exclure (optionnel)
+        model: Modèle MLX (si applicable)
+        processor: Processeur MLX (si applicable)
+        config: Configuration MLX (si applicable)
+        
+    Returns:
+        bool: True si la page doit être traitée, False sinon
+    """
+    try:
+        # Si aucun filtre n'est défini, traiter la page
+        if not include_filter.strip() and not exclude_filter.strip():
+            return True
+        
+        # Construire le prompt de routage optimisé pour les tokens
+        routing_prompt = "Analyse cette page et réponds UNIQUEMENT par 'true' ou 'false'.\n\n"
+        
+        if include_filter.strip() and exclude_filter.strip():
+            # Les deux filtres sont définis
+            routing_prompt += f"Cette page correspond-elle à la description suivante ET ne correspond-elle PAS à l'exclusion ?\n"
+            routing_prompt += f"À INCLURE: {include_filter.strip()}\n"
+            routing_prompt += f"À EXCLURE: {exclude_filter.strip()}\n"
+        elif include_filter.strip():
+            # Seulement le filtre d'inclusion
+            routing_prompt += f"Cette page correspond-elle à la description suivante ?\n"
+            routing_prompt += f"DESCRIPTION: {include_filter.strip()}\n"
+        else:
+            # Seulement le filtre d'exclusion  
+            routing_prompt += f"Cette page NE correspond-elle PAS à la description suivante ?\n"
+            routing_prompt += f"À ÉVITER: {exclude_filter.strip()}\n"
+        
+        routing_prompt += "\nSois strict dans ton analyse. Réponds uniquement 'true' ou 'false'."
+        
+        # Générer la réponse avec limitation de tokens
+        result = generate_from_image(image_path, routing_prompt, model, processor, config)
+        
+        # Vérifier si c'est une erreur API
+        if isinstance(result, str) and "error" in result.lower() and ("404" in result or "not found" in result.lower()):
+            print(f"❌ Erreur API lors du routage: {result}")
+            print(f"🔄 Tentative de fallback: traitement de la page par défaut")
+            return True  # Traiter la page par défaut en cas d'erreur API
+        
+        # Nettoyer et analyser la réponse
+        response = result.strip().lower()
+        
+        # Extraire la réponse boolean
+        if 'true' in response:
+            return True
+        elif 'false' in response:
+            return False
+        else:
+            # En cas de réponse ambiguë, par défaut traiter la page (sécurité)
+            print(f"Réponse de routage ambiguë: {result}. Traitement par défaut.")
+            return True
+            
+    except Exception as e:
+        print(f"Erreur lors du routage de page: {str(e)}")
+        # En cas d'erreur, traiter la page par défaut
+        return True

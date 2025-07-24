@@ -3,7 +3,7 @@ import pdf2image
 from PIL import Image
 from typing import List, Tuple, Dict
 
-from config import TEMP_DIR, global_state
+from core.config import TEMP_DIR, global_state
 
 # Configuration pour les images très larges
 Image.MAX_IMAGE_PIXELS = 300000000

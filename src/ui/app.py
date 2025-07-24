@@ -1,29 +1,50 @@
+"""
+Magic Document Scanner - Interface utilisateur Gradio
+
+Application de traitement intelligent de documents avec OCR et extraction de données.
+Interface web basée sur Gradio avec parallélisation optimisée pour les APIs.
+
+Features:
+- Scan automatique des sections de documents
+- Extraction de données avec mode expert
+- Support MLX (local) et API externes
+- Parallélisation intelligente configurée
+- Filtrage avancé des pages
+"""
+
 import os
 import json
 import gradio as gr
 import time
 import platform
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Importer les modules du projet
-from config import global_state, TEMP_DIR, show_runtime_info
-from utils import cleanup_temp_files, free_memory
-from model_handler import load_model
-from api_client import update_api_config
-from image_processor import convert_pdf_to_images
-from data_extractor import extract_sections_from_image, extract_section_values
-from mcp_functions import analyze_document, extract_values
+from core.config import global_state, TEMP_DIR, show_runtime_info
+from utils.utils import cleanup_temp_files, free_memory
+from core.model_handler import load_model
+from core.api_client import update_api_config
+from utils.image_processor import convert_pdf_to_images
+from core.data_extractor import extract_sections_from_image, extract_section_values, should_process_page
+from core.mcp_functions import analyze_document, extract_values
 
 # Fonction pour afficher simplement le mode actuel
 def display_current_mode():
-    """Affiche simplement le mode actuel"""
+    """
+    Affiche le mode d'exécution actuel avec ses paramètres.
+    
+    Returns:
+        str: Texte formaté décrivant le mode actuel (API/MLX) avec ses paramètres
+    """
     mode = global_state["MODE"]
     if mode == "api":
         api_config = global_state["api_config"]
         server = api_config["server"]
         model = api_config["model"]
+        pool_size = api_config.get("pool_size", 5)
         key_preview = api_config["api_key"][:4] + "..." if api_config["api_key"] and len(api_config["api_key"]) > 4 else "Non définie"
-        return f"### Mode actuel : API EXTERNE\n- Serveur : {server}\n- Modèle : {model}\n- Clé : {key_preview}"
+        return f"### Mode actuel : API EXTERNE\n- Serveur : {server}\n- Modèle : {model}\n- Pool : {pool_size} threads\n- Clé : {key_preview}"
     else:
         return f"### Mode actuel : MLX LOCAL\n- Modèle : {global_state['MODEL_NAME']}"
 
@@ -48,7 +69,6 @@ def magic_scan(file):
         global_state["file_paths"] = [file_path]
         _, file_extension = os.path.splitext(file_path)
         
-        print(f"*** MAGIC SCAN: MODE ACTUEL = {global_state['MODE']} ***")
         
         # Charger le modèle selon l'environnement
         model, processor, config = load_model()
@@ -209,21 +229,343 @@ def update_selected_sections_display(selected_sections):
         print(f"Erreur lors de la mise à jour de l'affichage des sections: {str(e)}")
         return "Erreur lors de la récupération des sections"
 
+# Fonction pour obtenir la taille du pool selon le mode
+def get_pool_size():
+    """
+    Retourne la taille du pool de threads selon le mode d'exécution.
+    
+    La taille du pool détermine le nombre de threads simultanés pour le traitement :
+    - Mode API : taille configurable par l'utilisateur (1-20 threads)
+    - Mode MLX : forcé à 1 thread (traitement séquentiel)
+    
+    Returns:
+        int: Nombre de threads à utiliser pour la parallélisation
+    """
+    current_mode = global_state["MODE"]
+    if current_mode == "api":
+        return global_state["api_config"]["pool_size"]
+    else:
+        # MLX : pool de taille 1 pour simuler le comportement séquentiel
+        return 1
+
+# Fonction pour traitement unifié en parallèle (tous modes)
+def process_documents_unified(files, section_titles, expert_prompt, page_include_filter, page_exclude_filter, expert_mode_enabled, model, processor, config, current_mode, temp_img_paths, start_time):
+    """
+    Traitement unifié en deux phases pour tous les modes :
+    - Mode API : pool configurable (parallélisation)
+    - Mode MLX : pool de taille 1 (séquentiel)
+    Phase 1 : Routage avec pool
+    Phase 2 : Extraction avec pool
+    """
+    try:
+        pool_size = get_pool_size()
+        mode_desc = f"parallélisation ({pool_size} threads)" if pool_size > 1 else "séquentiel (1 thread)"
+        print(f"🚀 Mode {current_mode}: traitement en 2 phases pour {len(files)} document(s) - {mode_desc}")
+        
+        # Phase 1: Collecter toutes les pages de tous les documents
+        all_page_data = []
+        all_results = []
+        
+        for doc_index, file in enumerate(files):
+            file_path = file.name
+            _, file_extension = os.path.splitext(file_path)
+            is_pdf = file_extension.lower() == '.pdf'
+            
+            # Préparer la structure de résultat pour ce document
+            doc_result = {
+                "document": os.path.basename(file_path),
+                "extracted_values": []
+            }
+            all_results.append(doc_result)
+            
+            if is_pdf:
+                # Convertir PDF en images
+                from image_processor import convert_pdf_to_images
+                img_paths = convert_pdf_to_images(file_path, doc_index=doc_index)
+                temp_img_paths.extend(img_paths)
+                
+                # Ajouter chaque page à la liste globale
+                for page_num, img_path in enumerate(img_paths):
+                    page_data = {
+                        "img_path": img_path,
+                        "page_num": page_num + 1,
+                        "doc_name": os.path.basename(file_path),
+                        "doc_index": doc_index,
+                        "section_titles": section_titles,
+                        "expert_prompt": expert_prompt,
+                        "page_include_filter": page_include_filter,
+                        "page_exclude_filter": page_exclude_filter,
+                        "expert_mode_enabled": expert_mode_enabled,
+                        "model": model,
+                        "processor": processor,
+                        "config": config
+                    }
+                    all_page_data.append(page_data)
+            else:
+                # Pour les images individuelles
+                page_data = {
+                    "img_path": file_path,
+                    "page_num": 1,
+                    "doc_name": os.path.basename(file_path),
+                    "doc_index": doc_index,
+                    "section_titles": section_titles,
+                    "expert_prompt": expert_prompt,
+                    "page_include_filter": page_include_filter,
+                    "page_exclude_filter": page_exclude_filter,
+                    "expert_mode_enabled": expert_mode_enabled,
+                    "model": model,
+                    "processor": processor,
+                    "config": config
+                }
+                all_page_data.append(page_data)
+        
+        total_pages = len(all_page_data)
+        print(f"📊 Total pages collectées: {total_pages}")
+        
+        # Phase 1: Routage avec pool (si mode expert avec filtres)
+        pages_to_extract = []
+        if expert_mode_enabled and (page_include_filter.strip() or page_exclude_filter.strip()):
+            print(f"🔍 PHASE 1: Routage de {total_pages} pages (pool: {pool_size})")
+            
+            # Réduire le pool si on a beaucoup de pages pour éviter la surcharge API
+            routing_pool_size = min(pool_size, 3) if current_mode == "api" and total_pages > 5 else pool_size
+            if routing_pool_size != pool_size:
+                print(f"🔄 Pool réduit à {routing_pool_size} pour le routage (éviter surcharge API)")
+            
+            with ThreadPoolExecutor(max_workers=routing_pool_size) as executor:
+                future_to_page = {executor.submit(route_single_page, page_data): page_data for page_data in all_page_data}
+                
+                api_errors = 0
+                for future in as_completed(future_to_page):
+                    result = future.result()
+                    if result["success"] and result["should_process"]:
+                        pages_to_extract.append(result["page_data"])
+                        print(f"✅ Page {result['page_num']} de {result['doc_name']}: sera traitée")
+                    elif result["success"]:
+                        print(f"❌ Page {result['page_num']} de {result['doc_name']}: sera ignorée")
+                    else:
+                        api_errors += 1
+                        print(f"💥 Erreur routage page {result['page_num']} de {result['doc_name']}")
+                
+                if api_errors > 0:
+                    print(f"⚠️  {api_errors} erreurs API détectées lors du routage")
+            
+            print(f"📋 Pages à extraire après routage: {len(pages_to_extract)}/{total_pages}")
+        else:
+            # Pas de filtrage, toutes les pages seront extraites
+            pages_to_extract = all_page_data
+            print(f"📋 Pas de filtrage: {len(pages_to_extract)} pages à extraire")
+        
+        # Phase 2: Extraction avec pool des pages validées
+        if pages_to_extract:
+            print(f"⚡ PHASE 2: Extraction de {len(pages_to_extract)} pages (pool: {pool_size})")
+            
+            with ThreadPoolExecutor(max_workers=pool_size) as executor:
+                future_to_page = {executor.submit(extract_single_page, page_data): page_data for page_data in pages_to_extract}
+                
+                for future in as_completed(future_to_page):
+                    result = future.result()
+                    if result["success"]:
+                        # Ajouter les résultats au bon document
+                        doc_result = all_results[result["doc_index"]]
+                        doc_result["extracted_values"].extend(result["values"])
+                        print(f"✅ Extraction page {result['page_num']} de {result['doc_name']} terminée")
+                    else:
+                        print(f"❌ Erreur extraction page {result['page_num']} de {result['doc_name']}: {result.get('error', 'Erreur inconnue')}")
+        
+        # Organiser les résultats finaux
+        result = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "mode": current_mode,
+            "expert_mode": expert_mode_enabled,
+            "documents": all_results
+        }
+        
+        # Sauvegarder en JSON
+        json_path = os.path.join(TEMP_DIR, "multi_doc_extracted_values.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+        
+        # Préparer un résumé pour l'affichage
+        total_extracted = sum(len(doc["extracted_values"]) for doc in all_results)
+        summary = f"Extraction réussie pour {len(files)} documents (Mode: {current_mode}"
+        if expert_mode_enabled:
+            summary += ", Mode Expert activé"
+        summary += f", {total_extracted} valeurs extraites):\n\n"
+        
+        for doc_result in all_results:
+            doc_name = doc_result["document"]
+            values = doc_result["extracted_values"]
+            summary += f"Document: {doc_name} ({len(values)} valeurs extraites)\n"
+            
+            for item in values:
+                confidence = item.get("confidence", 0) * 100
+                page = item.get("page", 1)
+                summary += f"  • {item['section']} (p.{page}): {item['value']} (confiance: {confidence:.0f}%)\n"
+            
+            summary += "\n"
+        
+        # Calculer et afficher le temps total de traitement
+        end_time = time.time()
+        total_time = end_time - start_time
+        print(f"✅ FIN DE L'EXTRACTION - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"⏱️  TEMPS TOTAL DE TRAITEMENT: {total_time:.2f} secondes ({total_time/60:.1f} minutes)")
+        
+        return summary, json_path
+        
+    except Exception as e:
+        # Calculer le temps même en cas d'erreur
+        end_time = time.time()
+        total_time = end_time - start_time
+        print(f"❌ ERREUR LORS DE L'EXTRACTION - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"⏱️  TEMPS AVANT ERREUR: {total_time:.2f} secondes ({total_time/60:.1f} minutes)")
+        print(f"Erreur lors du traitement: {str(e)}")
+        return f"Erreur lors de l'extraction: {str(e)}", None
+
+# Fonction pour effectuer le routage d'une page (phase 1)
+def route_single_page(page_data):
+    """
+    Effectue uniquement le routage d'une page (pour optimisation parallèle).
+    
+    Args:
+        page_data (dict): Dictionnaire contenant les informations de la page
+        
+    Returns:
+        dict: Résultat du routage pour cette page
+    """
+    try:
+        img_path = page_data["img_path"]
+        page_num = page_data["page_num"]
+        doc_name = page_data["doc_name"]
+        page_include_filter = page_data["page_include_filter"]
+        page_exclude_filter = page_data["page_exclude_filter"]
+        model = page_data["model"]
+        processor = page_data["processor"]
+        config = page_data["config"]
+        doc_index = page_data["doc_index"]
+        
+        # Vérifier si la page doit être traitée (filtrage en mode expert)
+        should_process = True
+        if page_include_filter.strip() or page_exclude_filter.strip():
+            should_process = should_process_page(
+                img_path, 
+                page_include_filter.strip(), 
+                page_exclude_filter.strip(), 
+                model, processor, config
+            )
+        
+        return {
+            "success": True,
+            "page_num": page_num,
+            "doc_name": doc_name,
+            "doc_index": doc_index,
+            "img_path": img_path,
+            "should_process": should_process,
+            "page_data": page_data  # Garder les données originales pour l'extraction
+        }
+        
+    except Exception as e:
+        print(f"Erreur lors du routage de la page {page_num} de {doc_name}: {str(e)}")
+        return {
+            "success": False,
+            "page_num": page_num,
+            "doc_name": doc_name,
+            "doc_index": doc_index,
+            "error": str(e),
+            "should_process": False
+        }
+
+# Fonction pour extraire les données d'une page (phase 2)
+def extract_single_page(page_data):
+    """
+    Effectue uniquement l'extraction d'une page (après validation du routage).
+    
+    Args:
+        page_data (dict): Dictionnaire contenant les informations de la page
+        
+    Returns:
+        dict: Résultats de l'extraction pour cette page
+    """
+    try:
+        img_path = page_data["img_path"]
+        page_num = page_data["page_num"]
+        doc_name = page_data["doc_name"]
+        doc_index = page_data["doc_index"]
+        section_titles = page_data["section_titles"]
+        expert_prompt = page_data["expert_prompt"]
+        expert_mode_enabled = page_data["expert_mode_enabled"]
+        model = page_data["model"]
+        processor = page_data["processor"]
+        config = page_data["config"]
+        
+        # Extraire les valeurs des sections pour cette page
+        expert_text = expert_prompt if expert_mode_enabled else ""
+        page_values = extract_section_values(img_path, section_titles, model, processor, config, expert_text)
+        
+        # Ajouter le numéro de page à chaque résultat
+        for value in page_values:
+            value["page"] = page_num
+        
+        return {
+            "success": True,
+            "page_num": page_num,
+            "doc_name": doc_name,
+            "doc_index": doc_index,
+            "values": page_values
+        }
+        
+    except Exception as e:
+        print(f"Erreur lors de l'extraction de la page {page_num} de {doc_name}: {str(e)}")
+        return {
+            "success": False,
+            "page_num": page_num,
+            "doc_name": doc_name,
+            "doc_index": doc_index,
+            "error": str(e),
+            "values": []
+        }
+
+
 # Fonction pour traiter plusieurs documents via l'interface Gradio
-def process_multiple_documents(files, selected_sections, expert_mode_enabled=False, expert_prompt=""):
+def process_multiple_documents(files, selected_sections, expert_prompt="", page_include_filter="", page_exclude_filter=""):
     """
     Extrait les valeurs des sections sélectionnées à partir d'un ou plusieurs documents.
+    Le mode expert est activé automatiquement si des champs expert sont remplis.
     
     Args:
         files (list): Liste des fichiers (PDF ou images) à traiter
         selected_sections (list): Liste des sections dont les valeurs doivent être extraites
-        expert_mode_enabled (bool): Indique si le mode expert est activé pour personnaliser l'extraction
-        expert_prompt (str): Instructions supplémentaires pour l'extraction en mode expert
+        expert_prompt (str): Instructions supplémentaires pour l'extraction (active automatiquement le mode expert)
+        page_include_filter (str): Description des pages à inclure (active automatiquement le mode expert)
+        page_exclude_filter (str): Description des pages à exclure (active automatiquement le mode expert)
         
     Returns:
         tuple: Un tuple contenant (1) un résumé textuel des extractions réalisées 
               et (2) le chemin vers le fichier JSON contenant les résultats détaillés
     """    
+    # Démarrer le chronomètre pour mesurer le temps total
+    import time
+    start_time = time.time()
+    print(f"🚀 DÉBUT DE L'EXTRACTION - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Détection automatique du mode expert basée sur le contenu des champs
+    expert_mode_enabled = bool(
+        expert_prompt.strip() or 
+        page_include_filter.strip() or 
+        page_exclude_filter.strip()
+    )
+    
+    if expert_mode_enabled:
+        print("🔧 MODE EXPERT ACTIVÉ AUTOMATIQUEMENT")
+        if expert_prompt.strip():
+            print(f"   • Instructions personnalisées: Oui ({len(expert_prompt.strip())} caractères)")
+        if page_include_filter.strip():
+            print(f"   • Filtre d'inclusion: {page_include_filter.strip()[:50]}...")
+        if page_exclude_filter.strip():
+            print(f"   • Filtre d'exclusion: {page_exclude_filter.strip()[:50]}...")
+    else:
+        print("📄 MODE STANDARD (aucun paramètre expert défini)")
+    
     try:
         if not files or not selected_sections:
             return "Veuillez sélectionner des documents et des sections à extraire.", None
@@ -257,87 +599,14 @@ def process_multiple_documents(files, selected_sections, expert_mode_enabled=Fal
         all_results = []
         temp_img_paths = []
         
-        # Traiter chaque fichier
-        for doc_index, file in enumerate(files):
-            file_path = file.name
-            _, file_extension = os.path.splitext(file_path)
-            is_pdf = file_extension.lower() == '.pdf'
-            
-            # Résultat pour ce document
-            doc_result = {
-                "document": os.path.basename(file_path),
-                "extracted_values": []
-            }
-            
-            # Traiter selon le type de fichier (identique pour les deux modes)
-            if is_pdf:
-                # Convertir PDF en images
-                from image_processor import convert_pdf_to_images
-                img_paths = convert_pdf_to_images(file_path, doc_index=doc_index)
-                temp_img_paths.extend(img_paths)
-                
-                # Traiter chaque image
-                for page_num, img_path in enumerate(img_paths):
-                    # Extraire les valeurs des sections pour cette page
-                    expert_text = expert_prompt if expert_mode_enabled else ""
-                    from data_extractor import extract_section_values
-                    page_values = extract_section_values(img_path, section_titles, model, processor, config, expert_text)
-                    
-                    # Ajouter le numéro de page à chaque résultat
-                    for value in page_values:
-                        value["page"] = page_num + 1
-                    
-                    # Ajouter à la liste des valeurs extraites
-                    doc_result["extracted_values"].extend(page_values)
-            else:
-                # Pour les images directement
-                expert_text = expert_prompt if expert_mode_enabled else ""
-                from data_extractor import extract_section_values
-                page_values = extract_section_values(file_path, section_titles, model, processor, config, expert_text)
-                
-                # Ajouter le numéro de page
-                for value in page_values:
-                    value["page"] = 1
-                
-                # Ajouter à la liste des valeurs extraites
-                doc_result["extracted_values"].extend(page_values)
-            
-            # Ajouter les résultats de ce document
-            all_results.append(doc_result)
-        
-        # Organiser les résultats
-        result = {
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "mode": current_mode,  # Indiquer le mode utilisé
-            "expert_mode": expert_mode_enabled,
-            "documents": all_results
-        }
-        
-        # Sauvegarder en JSON
-        json_path = os.path.join(TEMP_DIR, "multi_doc_extracted_values.json")
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-        
-        # Préparer un résumé pour l'affichage
-        summary = f"Extraction réussie pour {len(files)} documents (Mode: {current_mode}"
-        if expert_mode_enabled:
-            summary += ", Mode Expert activé"
-        summary += "):\n\n"
-        
-        for doc_result in all_results:
-            doc_name = doc_result["document"]
-            values = doc_result["extracted_values"]
-            summary += f"Document: {doc_name} ({len(values)} valeurs extraites)\n"
-            
-            for item in values:
-                confidence = item.get("confidence", 0) * 100
-                page = item.get("page", 1)
-                summary += f"  • {item['section']} (p.{page}): {item['value']} (confiance: {confidence:.0f}%)\n"
-            
-            summary += "\n"
-        
-        return summary, json_path
+        # Utiliser la version unifiée pour tous les modes
+        return process_documents_unified(files, section_titles, expert_prompt, page_include_filter, page_exclude_filter, expert_mode_enabled, model, processor, config, current_mode, temp_img_paths, start_time)
     except Exception as e:
+        # Calculer le temps même en cas d'erreur
+        end_time = time.time()
+        total_time = end_time - start_time
+        print(f"❌ ERREUR LORS DE L'EXTRACTION - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"⏱️  TEMPS AVANT ERREUR: {total_time:.2f} secondes ({total_time/60:.1f} minutes)")
         print(f"Erreur lors du traitement multiple: {str(e)}")
         return f"Erreur lors de l'extraction: {str(e)}", None
     finally:
@@ -356,9 +625,9 @@ def process_multiple_documents(files, selected_sections, expert_mode_enabled=Fal
         free_memory()
 
 # Fonction pour mettre à jour la configuration API directement dans l'interface
-def direct_api_config_update(server, model, api_key, enabled):
+def direct_api_config_update(server, model, api_key, enabled, pool_size):
     """Fonction qui met à jour la configuration API et force la mise à jour de l'interface"""
-    result = update_api_config(server, model, api_key, enabled)
+    result = update_api_config(server, model, api_key, enabled, pool_size)
     # Renvoyer aussi l'état actuel du mode pour l'affichage
     return result, display_current_mode()
 
@@ -367,7 +636,7 @@ analyze_document_for_mcp = analyze_document
 extract_values_from_document = extract_values
 
 # Interface Gradio
-with gr.Blocks(title="Magic Document Scanner") as app:
+with gr.Blocks(title="Magic Document Scanner", theme=gr.themes.Glass()) as app:
     gr.Markdown("# 📄 Magic Document Scanner")
     
     # Affichage du mode actuel (remplace l'ancien bandeau)
@@ -397,6 +666,14 @@ with gr.Blocks(title="Magic Document Scanner") as app:
                 api_enabled = gr.Checkbox(
                     label="Activer l'API externe", 
                     value=global_state["api_config"]["enabled"]
+                )
+                api_pool_size = gr.Slider(
+                    label="Taille du pool (parallélisation)", 
+                    minimum=1, 
+                    maximum=20, 
+                    step=1,
+                    value=global_state["api_config"]["pool_size"],
+                    info="Nombre de requêtes simultanées (1-20)"
                 )
                 update_api_button = gr.Button("💾 Sauvegarder et activer", variant="primary")
     
@@ -437,10 +714,18 @@ with gr.Blocks(title="Magic Document Scanner") as app:
         )
         
         with gr.Accordion("🔧 Mode Expert", open=False):
-            expert_mode_enabled = gr.Checkbox(
-                label="Activer le mode expert", 
-                value=False
-            )
+            with gr.Row():
+                page_include_filter = gr.Textbox(
+                    label="Pages à inclure (description)",
+                    placeholder="Ex: pages contenant des factures, documents avec en-tête officiel, formulaires remplis...",
+                    lines=2
+                )
+                page_exclude_filter = gr.Textbox(
+                    label="Pages à exclure (description)",
+                    placeholder="Ex: pages vides, couvertures, pages de garde, annexes...",
+                    lines=2
+                )
+            
             expert_prompt = gr.Textbox(
                 label="Instructions supplémentaires (prompt personnalisé)",
                 placeholder="Ajoutez ici des instructions spécifiques pour guider l'extraction, par exemple:\n- Considérer les valeurs à proximité immédiate du champ\n- Ignorer les valeurs barrées ou en italique\n- Rechercher aussi dans les tableaux\n- Considérer le texte en pied de page",
@@ -454,7 +739,7 @@ with gr.Blocks(title="Magic Document Scanner") as app:
     # Connecter les événements
     update_api_button.click(
         fn=direct_api_config_update,
-        inputs=[api_server, api_model, api_key, api_enabled],
+        inputs=[api_server, api_model, api_key, api_enabled, api_pool_size],
         outputs=[gr.Markdown(), current_mode_display]
     )
     
@@ -479,7 +764,7 @@ with gr.Blocks(title="Magic Document Scanner") as app:
     
     extract_button.click(
         fn=process_multiple_documents,
-        inputs=[files_input, sections_output, expert_mode_enabled, expert_prompt],
+        inputs=[files_input, sections_output, expert_prompt, page_include_filter, page_exclude_filter],
         outputs=[extraction_results, values_json_output]
     )
     
@@ -539,6 +824,17 @@ with gr.Blocks(title="Magic Document Scanner") as app:
        - Ajoutez l'URL MCP dans la configuration de votre assistant IA
     """)
 
-# Lancer l'application
+def main():
+    """
+    Point d'entrée principal de l'application Gradio.
+    
+    Lance l'interface web avec le serveur MCP activé.
+    """
+    app.launch(
+        mcp_server=True,  # Activer le serveur MCP
+        share=False  # Pas de tunnel public par défaut
+    )
+
+# Lancer l'application si exécutée directement
 if __name__ == "__main__":
-    app.launch(mcp_server=True)  # Activer le serveur MCP
+    main()

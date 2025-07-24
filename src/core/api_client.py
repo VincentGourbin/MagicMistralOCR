@@ -1,11 +1,25 @@
+"""
+Client API - Magic Document Scanner
+
+Ce module gère les appels aux APIs externes :
+- Appels REST vers les APIs de modèles (Mistral, OpenAI, etc.)
+- Configuration et validation des paramètres API
+- Gestion des erreurs et timeouts
+- Support des serveurs locaux (LM Studio, Ollama)
+
+Functions:
+- call_external_api(): Effectue un appel à l'API externe
+- update_api_config(): Met à jour la configuration API
+"""
+
 import os
 import json
 import requests
 import pdf2image
 from typing import Dict, Any
 
-from config import global_state, TEMP_DIR, refresh_api_status
-from utils import image_to_base64
+from core.config import global_state, TEMP_DIR, refresh_api_status
+from utils.utils import image_to_base64
 
 # Fonction pour effectuer un appel API externe au format OpenAI/Mistral
 def call_external_api(image_path: str, prompt_text: str, page_num: int = 0) -> str:
@@ -21,8 +35,6 @@ def call_external_api(image_path: str, prompt_text: str, page_num: int = 0) -> s
         str: Réponse de l'API (texte ou JSON)
     """
     try:
-        print("*** FONCTION call_external_api APPELÉE ***")
-        print(f"Mode actuel: {global_state['MODE']}")
         
         api_config = global_state["api_config"]
         
@@ -90,7 +102,6 @@ def call_external_api(image_path: str, prompt_text: str, page_num: int = 0) -> s
             "max_tokens": 16384
         }
         
-        print(f"Envoi de la requête API à: {api_config['server']}")
         
         # Envoi de la requête
         try:
@@ -118,8 +129,13 @@ def call_external_api(image_path: str, prompt_text: str, page_num: int = 0) -> s
             except:
                 return response.text
         else:
+            error_msg = f"Erreur API (code {response.status_code}): {response.text}"
+            if response.status_code == 404:
+                print(f"🔍 DEBUG 404 - URL utilisée: {api_config['server']}")
+                print(f"🔍 DEBUG 404 - Headers: {headers}")
+                error_msg += f" [URL: {api_config['server']}]"
             return json.dumps({
-                "error": f"Erreur API (code {response.status_code}): {response.text}"
+                "error": error_msg
             })
             
     except Exception as e:
@@ -134,7 +150,7 @@ def call_external_api(image_path: str, prompt_text: str, page_num: int = 0) -> s
                 print(f"Erreur lors du nettoyage du fichier temporaire: {str(e)}")
 
 # Fonction pour mettre à jour la configuration de l'API
-def update_api_config(server: str, model: str, api_key: str, enabled: bool) -> str:
+def update_api_config(server: str, model: str, api_key: str, enabled: bool, pool_size: int = 5) -> str:
     """
     Met à jour la configuration de l'API externe.
     
@@ -165,12 +181,16 @@ def update_api_config(server: str, model: str, api_key: str, enabled: bool) -> s
         previous_mode = global_state["MODE"]
         print(f"État initial - Mode: {previous_mode}, API utilisable: {api_usable}")
         
+        # Validation de la taille du pool
+        pool_size = max(1, min(20, int(pool_size)))  # Limiter entre 1 et 20
+        
         # Mise à jour de la configuration
         global_state["api_config"] = {
             "server": clean_server,
             "model": clean_model,
             "api_key": clean_api_key,
-            "enabled": enabled
+            "enabled": enabled,
+            "pool_size": pool_size
         }
         
         # Modification DIRECTE du mode
@@ -179,7 +199,7 @@ def update_api_config(server: str, model: str, api_key: str, enabled: bool) -> s
             global_state["MODEL_NAME"] = clean_model
         else:
             # Revenir au mode MLX si désactivé
-            from config import is_mac_mlx
+            from core.config import is_mac_mlx
             if is_mac_mlx:
                 global_state["MODE"] = "mlx"
             else:

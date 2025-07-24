@@ -1,5 +1,16 @@
+# Interface utilisateur
 gradio>=5.22.0
+gradio[mcp]>=5.22.0
+
+# Traitement d'images et PDF
 pdf2image>=1.16.0
 Pillow>=9.0.0
+
+# Réseau et API
 requests>=2.28.0
-gradio[mcp]
+
+# Outils système
+typing_extensions>=4.0.0
+
+# Note: Pour Mac Apple Silicon, utilisez mac-requirements.txt
+# qui inclut les dépendances MLX optimisées

@@ -1,3 +1,18 @@
+"""
+Configuration globale - Magic Document Scanner
+
+Ce module contient la configuration globale de l'application, incluant :
+- Variables d'état global
+- Configuration des modes d'exécution (MLX/API)
+- Paramètres des modèles et APIs
+- Détection automatique de l'environnement
+
+Variables principales:
+- global_state: État partagé de l'application
+- MODE: Mode d'exécution détecté (mlx/api/mlx_fallback)
+- MODEL_NAME: Nom du modèle utilisé
+"""
+
 import os
 import tempfile
 import platform
@@ -22,7 +37,8 @@ global_state = {
         "server": os.environ.get("api_server", "https://api.mistral.ai/v1/chat/completions"),
         "model": os.environ.get("api_model", "mistral-small-latest"),
         "api_key": os.environ.get("api_key", ""),
-        "enabled": bool(os.environ.get("api_key", ""))
+        "enabled": bool(os.environ.get("api_key", "")),
+        "pool_size": int(os.environ.get("api_pool_size", "5"))  # Taille du pool de threads
     },
     "MODE": "",               # Mode d'exécution explicitement stocké dans global_state
     "MODEL_NAME": ""          # Nom du modèle explicitement stocké dans global_state
@@ -99,8 +115,13 @@ def refresh_api_status():
             MODEL_NAME = global_state["MODEL_NAME"]
             print(f"*** MODE CHANGÉ: {previous_mode} -> {global_state['MODE']} (API activée: {use_api}) ***")
 
-# Fonction pour afficher l'info sur le mode d'exécution actuel
-def show_runtime_info():
+def show_runtime_info() -> str:
+    """
+    Affiche les informations sur le mode d'exécution actuel.
+    
+    Returns:
+        str: Description détaillée du mode d'exécution et de la configuration
+    """
     # Utiliser DIRECTEMENT global_state pour éviter les incohérences
     if global_state["MODE"] == "mlx":
         return "Exécution avec MLX sur Mac Apple Silicon - Modèle: mlx-community/Mistral-Small-3.1-24B-Instruct-2503-8bit"

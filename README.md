@@ -1,36 +1,36 @@
-# MagicMistralOCR
+# 📄 Magic Document Scanner
 
-🚀 **Application d'analyse intelligente de documents utilisant des modèles de vision-langage (VLM) pour extraire des informations structurées**
+Une application intelligente de traitement de documents avec OCR et extraction de données utilisant des modèles de vision-langage (VLM) en local ou via API.
 
-![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)
-![Python](https://img.shields.io/badge/python-3.12-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![Gradio](https://img.shields.io/badge/gradio-latest-orange.svg)
+![MLX](https://img.shields.io/badge/MLX-Apple%20Silicon-green.svg)
 
 ## 📋 Table des matières
 
-- [Aperçu](#aperçu)
-- [Fonctionnalités](#fonctionnalités)
-- [Architecture](#architecture)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Utilisation](#utilisation)
-- [Intégration MCP](#intégration-mcp)
-- [Structure du projet](#structure-du-projet)
-- [Contribution](#contribution)
-- [Licence](#licence)
+- [✨ Fonctionnalités](#-fonctionnalités)
+- [🏗️ Architecture](#️-architecture)
+- [🚀 Installation](#-installation)
+- [🎯 Utilisation](#-utilisation)
+- [⚙️ Configuration avancée](#️-configuration-avancée)
+- [🔌 Intégration MCP](#-intégration-mcp)
+- [📊 Performances](#-performances)
+- [🛠️ Développement](#️-développement)
+- [📄 Licence](#-licence)
 
 ## 🎯 Aperçu
 
-**MagicMistralOCR** est une solution d'analyse documentaire intelligente qui combine la puissance des modèles de vision-langage modernes avec une interface utilisateur intuitive. L'application permet d'extraire automatiquement des informations structurées à partir de documents (PDF, images) en utilisant soit des modèles locaux optimisés (MLX sur Apple Silicon) soit des APIs externes (Mistral AI, OpenAI).
+**Magic Document Scanner** est une solution d'analyse documentaire intelligente qui combine la puissance des modèles de vision-langage modernes avec une interface utilisateur intuitive. L'application permet d'extraire automatiquement des informations structurées à partir de documents (PDF, images) en utilisant soit des modèles locaux optimisés (MLX sur Apple Silicon) soit des APIs externes.
 
 ### Points forts
 
-- 🧠 **IA avancée** : Utilise des modèles de vision-langage pour comprendre le contexte des documents
-- ⚡ **Performances optimisées** : Support natif MLX pour Apple Silicon
-- 🌐 **Flexibilité** : Compatible avec les APIs externes (Mistral, OpenAI, serveurs locaux)
-- 🔌 **Intégration MCP** : Compatible avec Claude Desktop et autres assistants IA
-- 📊 **Interface intuitive** : Interface web Gradio avec traitement par lot
-- 🛡️ **Robuste** : Gestion d'erreurs complète et nettoyage automatique des ressources
+- 🧠 **IA avancée** : Modèles de vision-langage pour comprendre le contexte
+- ⚡ **Parallélisation optimisée** : Pool de threads configurable (1-20)
+- 🎯 **Routage intelligent** : Filtrage des pages avant extraction (économie de coûts)
+- 🌐 **Multi-plateforme** : MLX local (Apple Silicon) ou APIs externes
+- 🔌 **Intégration MCP** : Compatible Claude Desktop et assistants IA
+- 🛡️ **Sécurité renforcée** : Protection contre l'injection de prompts
 
 ## ✨ Fonctionnalités
 
@@ -69,13 +69,19 @@ graph TD
 
 ### Composants principaux
 
-- **`app.py`** : Interface web Gradio principale
+#### Core (`src/core/`)
 - **`config.py`** : Gestion de la configuration et de l'état global
 - **`model_handler.py`** : Chargement et utilisation des modèles
 - **`api_client.py`** : Communication avec les APIs externes
 - **`data_extractor.py`** : Logique d'analyse et d'extraction
-- **`image_processor.py`** : Traitement des images et PDF
 - **`mcp_functions.py`** : Intégration MCP pour assistants IA
+
+#### Interface (`src/ui/`)
+- **`app.py`** : Interface web Gradio principale
+
+#### Utilitaires (`src/utils/`)
+- **`utils.py`** : Fonctions utilitaires générales
+- **`image_processor.py`** : Traitement des images et PDF
 
 ## 🚀 Installation
 
@@ -136,7 +142,7 @@ L'application détecte automatiquement votre environnement et configure le mode 
 ### Démarrage de l'application
 
 ```bash
-python app.py
+python main.py
 ```
 
 L'interface sera disponible à l'adresse : `http://localhost:7860`
@@ -162,7 +168,7 @@ L'interface sera disponible à l'adresse : `http://localhost:7860`
 ### Utilisation programmatique
 
 ```python
-from mcp_functions import analyze_document, extract_values
+from src.core.mcp_functions import analyze_document, extract_values
 
 # Analyse automatique
 sections = analyze_document("path/to/document.pdf")
@@ -208,18 +214,28 @@ Claude utilisera automatiquement MagicMistralOCR pour analyser le document et ex
 
 ```
 MagicMistralOCR/
-├── app.py                 # Interface Gradio principale
-├── config.py              # Configuration et état global  
-├── model_handler.py       # Gestion des modèles
-├── api_client.py          # Client API externe
-├── data_extractor.py      # Logique d'extraction
-├── image_processor.py     # Traitement d'images
-├── mcp_functions.py       # Fonctions MCP
+├── main.py                # Point d'entrée principal
 ├── mcp_server.py          # Serveur MCP
-├── utils.py               # Utilitaires
 ├── requirements.txt       # Dépendances standard
 ├── mac-requirements.txt   # Dépendances Mac MLX
-└── README.md             # Documentation
+├── README.md             # Documentation
+├── LICENSE               # Licence AGPL-3.0
+└── src/                  # Code source organisé
+    ├── __init__.py
+    ├── core/             # Modules principaux
+    │   ├── __init__.py
+    │   ├── config.py         # Configuration globale
+    │   ├── model_handler.py  # Gestion des modèles
+    │   ├── api_client.py     # Client API externe
+    │   ├── data_extractor.py # Logique d'extraction
+    │   └── mcp_functions.py  # Fonctions MCP
+    ├── ui/               # Interface utilisateur
+    │   ├── __init__.py
+    │   └── app.py           # Interface Gradio
+    └── utils/            # Utilitaires
+        ├── __init__.py
+        ├── utils.py          # Fonctions utilitaires
+        └── image_processor.py # Traitement d'images
 ```
 
 ## 🤝 Contribution
